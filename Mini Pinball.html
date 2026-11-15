@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mini Pinball</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1020; --panel:#1f2937; --gold:#fbbf24; --ink:#e5e7eb; --muted:#cbd5e1; --line:#475569;
+    box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
+  html { height:100%; scroll-padding-top:env(safe-area-inset-top,0px); }
+  *, *::before, *::after { box-sizing:border-box; }
+  body { margin:0; min-height:100%; display:grid; place-items:center; background:var(--bg); color:var(--ink); font-family:system-ui,sans-serif; user-select:none; -webkit-user-select:none; }
+  .wrap { width:min(94vw,520px); width:min(94vw,520px,calc((100dvh - 210px)*.6)); text-align:center; }
+  h1 { margin:0 0 8px; font-size:1.3rem; letter-spacing:3px; color:var(--gold); }
+  .hud { display:flex; justify-content:space-between; background:var(--panel); border:1px solid var(--line); border-radius:12px 12px 0 0; padding:8px 16px; font-weight:700; }
+  canvas { display:block; width:100%; aspect-ratio:3/5; background:#172554; border:3px solid #94a3b8; border-top:0; border-radius:0 0 14px 14px; box-shadow:0 18px 45px #0008; touch-action:none; }
+  .help { margin:8px 0 0; font-size:.8rem; color:var(--muted); }
+  button { margin-top:8px; border:0; border-radius:9px; padding:8px 18px; font-weight:700; cursor:pointer; background:var(--gold); color:#111827; }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>MINI PINBALL</h1>
+    <div class="hud"><span>Punti: <b id="score">0</b></span><span>Palline: <b id="balls">3</b></span></div>
+    <canvas id="game" width="360" height="600"></canvas>
+    <div class="help">Frecce ← → (o A / D) oppure tocca il lato sinistro o destro dello schermo.</div>
+    <button id="restart">Ricomincia</button>
+  </main>
+<script>
+const c = document.getElementById('game'), ctx = c.getContext('2d');
+const scoreEl = document.getElementById('score'), ballsEl = document.getElementById('balls');
+const W = c.width, H = c.height;
+const G = 0.14, MAXV = 15, SUB = 3;
+const WL = 20, WR = W - 20, WT = 20;
+let score = 0, balls = 3, running = true, keyL = false, keyR = false, left = false, right = false;
+const ptr = new Map();
+const p = { x: 180, y: 45, vx: 0, vy: 1, r: 8 };
+
+const bumpers = [
+  { x: 95, y: 175, r: 25 }, { x: 265, y: 175, r: 25 }, { x: 180, y: 265, r: 28 },
+  { x: 95, y: 350, r: 23 }, { x: 265, y: 350, r: 23 }
+].map(b => ({ ...b, flash: 0 }));
+
+// Guide laterali che portano la pallina verso i flipper
+const guides = [
+  { ax: WL, ay: 465, bx: 100, by: 520 },
+  { ax: WR, ay: 465, bx: 260, by: 520 }
+];
+
+// side = 1 sinistro, -1 destro; a = angolo corrente (rad)
+const flippers = [
+  { px: 105, py: 525, len: 68, side: 1,  a: 0.45, rest: 0.45, up: -0.5, om: 0 },
+  { px: 255, py: 525, len: 68, side: -1, a: 0.45, rest: 0.45, up: -0.5, om: 0 }
+];
+
+function resetBall() {
+  p.x = 70 + Math.random() * 220; p.y = 45;
+  p.vx = (Math.random() - 0.5) * 3; p.vy = 1;
+}
+
+// Collisione cerchio (pallina) contro segmento con spessore rad.
+// om = velocità angolare del segmento attorno a (px,py), e = elasticità
+function collideSeg(ax, ay, bx, by, rad, om, px, py, e) {
+  const abx = bx - ax, aby = by - ay;
+  let t = ((p.x - ax) * abx + (p.y - ay) * aby) / (abx * abx + aby * aby);
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + abx * t, cy = ay + aby * t;
+  let dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy);
+  const min = p.r + rad;
+  if (d >= min) return false;
+  if (d < 1e-6) { dx = 0; dy = -1; d = 1; }
+  const nx = dx / d, ny = dy / d;
+  p.x = cx + nx * min; p.y = cy + ny * min;
+  const sx = -om * (cy - py), sy = om * (cx - px);
+  const vn = (p.vx - sx) * nx + (p.vy - sy) * ny;
+  if (vn < 0) { p.vx -= (1 + e) * vn * nx; p.vy -= (1 + e) * vn * ny; }
+  return true;
+}
+
+function step() {
+  for (const f of flippers) {
+    const on = f.side === 1 ? left : right;
+    const tgt = on ? f.up : f.rest, sp = on ? 0.26 : 0.16, old = f.a;
+    f.a += Math.max(-sp, Math.min(sp, tgt - f.a));
+    f.om = (f.a - old) * f.side;
+  }
+  if (!running) return;
+  for (let i = 0; i < SUB; i++) {
+    const dt = 1 / SUB;
+    p.vy += G * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.x < WL + p.r) { p.x = WL + p.r; p.vx = Math.abs(p.vx) * 0.9; }
+    if (p.x > WR - p.r) { p.x = WR - p.r; p.vx = -Math.abs(p.vx) * 0.9; }
+    if (p.y < WT + p.r) { p.y = WT + p.r; p.vy = Math.abs(p.vy) * 0.9; }
+    for (const b of bumpers) {
+      let dx = p.x - b.x, dy = p.y - b.y, d = Math.hypot(dx, dy) || 0.001;
+      const min = p.r + b.r;
+      if (d < min) {
+        const nx = dx / d, ny = dy / d;
+        p.x = b.x + nx * min; p.y = b.y + ny * min;
+        const dot = p.vx * nx + p.vy * ny;
+        if (dot < 0) { p.vx -= 2 * dot * nx; p.vy -= 2 * dot * ny; }
+        const s = Math.hypot(p.vx, p.vy);
+        if (s < 6) { p.vx *= 6 / s; p.vy *= 6 / s; }   // calcio minimo del bumper
+        b.flash = 8; score += 100;
+      }
+    }
+    for (const g of guides) collideSeg(g.ax, g.ay, g.bx, g.by, 3, 0, 0, 0, 0.5);
+    for (const f of flippers) {
+      const tx = f.px + f.side * Math.cos(f.a) * f.len, ty = f.py + Math.sin(f.a) * f.len;
+      collideSeg(f.px, f.py, tx, ty, 7, f.om, f.px, f.py, 0.35);
+    }
+  }
+  const s = Math.hypot(p.vx, p.vy);
+  if (s > MAXV) { p.vx *= MAXV / s; p.vy *= MAXV / s; }
+  if (p.y > H + 20) {
+    balls--; ballsEl.textContent = balls;
+    if (balls <= 0) running = false; else resetBall();
+  }
+  scoreEl.textContent = score;
+}
+
+function draw() {
+  ctx.fillStyle = '#172554'; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(WL - 2, 465); ctx.lineTo(WL - 2, WT - 2); ctx.lineTo(WR + 2, WT - 2); ctx.lineTo(WR + 2, 465); ctx.stroke();
+  ctx.lineWidth = 6;
+  for (const g of guides) { ctx.beginPath(); ctx.moveTo(g.ax, g.ay); ctx.lineTo(g.bx, g.by); ctx.stroke(); }
+  ctx.fillStyle = '#fef3c7'; ctx.font = 'bold 14px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText('★  COLPISCI I BUMPER  ★', 180, 50);
+  for (const b of bumpers) {
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = b.flash > 0 ? '#f87171' : '#dc2626'; ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#fca5a5'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(b.x, b.y, 7, 0, Math.PI * 2); ctx.fillStyle = '#fde68a'; ctx.fill();
+    if (b.flash > 0) b.flash--;
+  }
+  for (const f of flippers) {
+    const on = f.side === 1 ? left : right;
+    ctx.save(); ctx.translate(f.px, f.py); ctx.rotate(f.side === 1 ? f.a : Math.PI - f.a);
+    ctx.fillStyle = on ? '#fbbf24' : '#f97316';
+    ctx.fillRect(0, -7, f.len, 14);
+    ctx.beginPath(); ctx.arc(f.len, 0, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fillStyle = '#fef3c7'; ctx.fill();
+    ctx.restore();
+  }
+  ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff'; ctx.shadowColor = '#fff'; ctx.shadowBlur = 12; ctx.fill(); ctx.shadowBlur = 0;
+  if (!running) {
+    ctx.fillStyle = '#000b'; ctx.fillRect(20, 250, 320, 100);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 26px system-ui'; ctx.fillText('GAME OVER', 180, 295);
+    ctx.font = '16px system-ui'; ctx.fillText('Premi Ricomincia', 180, 325);
+  }
+}
+
+let last = 0, acc = 0;
+function loop(t) {
+  const dt = Math.min(50, t - last || 16); last = t; acc += dt;
+  while (acc >= 1000 / 60) { step(); acc -= 1000 / 60; }
+  draw(); requestAnimationFrame(loop);
+}
+
+function sync() {
+  const sides = [...ptr.values()];
+  left = keyL || sides.includes('L'); right = keyR || sides.includes('R');
+}
+const isL = k => k === 'ArrowLeft' || k === 'a' || k === 'z';
+const isR = k => k === 'ArrowRight' || k === 'd' || k === '/';
+addEventListener('keydown', e => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (isL(k)) { keyL = true; e.preventDefault(); }
+  if (isR(k)) { keyR = true; e.preventDefault(); }
+  sync();
+});
+addEventListener('keyup', e => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (isL(k)) keyL = false;
+  if (isR(k)) keyR = false;
+  sync();
+});
+c.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const r = c.getBoundingClientRect();
+  ptr.set(e.pointerId, e.clientX - r.left < r.width / 2 ? 'L' : 'R'); sync();
+});
+const release = e => { ptr.delete(e.pointerId); sync(); };
+addEventListener('pointerup', release);
+addEventListener('pointercancel', release);
+addEventListener('blur', () => { ptr.clear(); keyL = keyR = false; sync(); });
+document.getElementById('restart').onclick = e => {
+  score = 0; balls = 3; running = true;
+  scoreEl.textContent = 0; ballsEl.textContent = 3; resetBall(); e.currentTarget.blur();
+};
+resetBall();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
