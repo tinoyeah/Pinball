@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mini Pinball</title>
+  <style>
+    :root { --bg:#111827; --panel:#1f2937; --gold:#fbbf24; --ink:#e5e7eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:radial-gradient(circle at top,#26344d,#0b1020 70%); color:var(--ink); font-family:system-ui,sans-serif; }
+    .wrap { width:min(94vw,520px); text-align:center; }
+    h1 { margin:0 0 8px; letter-spacing:3px; color:var(--gold); }
+    .hud { display:flex; justify-content:space-between; background:var(--panel); border:1px solid #475569; border-radius:12px 12px 0 0; padding:10px 16px; font-weight:700; }
+    canvas { display:block; width:100%; aspect-ratio:3/5; background:#172554; border:3px solid #94a3b8; border-top:0; border-radius:0 0 14px 14px; box-shadow:0 18px 45px #0008; touch-action:none; }
+    .help { margin:12px 0 0; font-size:.9rem; color:#cbd5e1; }
+    button { margin-top:10px; border:0; border-radius:9px; padding:9px 18px; font-weight:700; cursor:pointer; background:var(--gold); color:#111827; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>MINI PINBALL</h1>
+    <div class="hud"><span>Punti: <b id="score">0</b></span><span>Palline: <b id="balls">3</b></span></div>
+    <canvas id="game" width="360" height="600"></canvas>
+    <div class="help">Tieni premuti <b>←</b> e <b>→</b> oppure tocca i lati dello schermo per azionare i flipper.</div>
+    <button id="restart">Ricomincia</button>
+  </main>
+  <script>
+    const c=document.getElementById('game'), x=c.getContext('2d');
+    const scoreEl=document.getElementById('score'), ballsEl=document.getElementById('balls');
+    const W=c.width,H=c.height; let score=0, balls=3, running=true, left=false, right=false;
+    const p={x:180,y:535,vx:2.3,vy:-5.6,r:8};
+    const bumpers=[{x:95,y:175,r:25},{x:265,y:175,r:25},{x:180,y:265,r:28},{x:95,y:350,r:23},{x:265,y:350,r:23}];
+    const bars=[{x:66,y:445,w:82,h:13},{x:212,y:445,w:82,h:13}];
+    function resetBall(){ p.x=180;p.y=535;p.vx=(Math.random()>.5?1:-1)*2.2;p.vy=-5.8; }
+    function update(){
+      if(!running)return;
+      p.vy+=.12;p.x+=p.vx;p.y+=p.vy;
+      if(p.x<p.r){p.x=p.r;p.vx=Math.abs(p.vx)*.95} if(p.x>W-p.r){p.x=W-p.r;p.vx=-Math.abs(p.vx)*.95}
+      if(p.y<p.r+18){p.y=p.r+18;p.vy=Math.abs(p.vy)}
+      for(const b of bumpers){let dx=p.x-b.x,dy=p.y-b.y,d=Math.hypot(dx,dy),min=p.r+b.r;if(d<min){let nx=dx/d,ny=dy/d;p.x=b.x+nx*min;p.y=b.y+ny*min;let dot=p.vx*nx+p.vy*ny;p.vx-=2*dot*nx;p.vy-=2*dot*ny;p.vx*=1.08;p.vy*=1.08;score+=100;}}
+      for(const q of bars){if(p.x>q.x-p.r&&p.x<q.x+q.w+p.r&&p.y>q.y-p.r&&p.y<q.y+q.h+p.r&&p.vy>0){p.y=q.y-p.r;p.vy=-Math.abs(p.vy)*1.03;score+=25;}}
+      const flippers=[{x:78,y:510,ang:left?-0.35:0.35},{x:282,y:510,ang:right?Math.PI-0.35:Math.PI-0.35}];
+      for(const f of flippers){const tipX=f.x+Math.cos(f.ang)*76,tipY=f.y+Math.sin(f.ang)*76;let dx=p.x-tipX,dy=p.y-tipY;if(Math.hypot(dx,dy)<p.r+12&&p.vy>0){p.vy=-7;p.vx+=(dx>0?1:-1)*2;score+=10;}}
+      if(p.y>H+20){balls--;ballsEl.textContent=balls;if(balls<=0){running=false}else resetBall();}
+      scoreEl.textContent=score;
+    }
+    function draw(){
+      x.clearRect(0,0,W,H); x.fillStyle='#172554';x.fillRect(0,0,W,H);
+      x.strokeStyle='#60a5fa';x.lineWidth=5;x.strokeRect(13,16,W-26,H-30);
+      x.fillStyle='#fef3c7';x.font='bold 14px system-ui';x.textAlign='center';x.fillText('★  HIT THE BUMPERS  ★',180,45);
+      for(const b of bumpers){x.beginPath();x.arc(b.x,b.y,b.r,0,7);x.fillStyle='#dc2626';x.fill();x.lineWidth=4;x.strokeStyle='#fca5a5';x.stroke();x.beginPath();x.arc(b.x,b.y,7,0,7);x.fillStyle='#fde68a';x.fill();}
+      for(const q of bars){x.fillStyle='#22d3ee';x.fillRect(q.x,q.y,q.w,q.h);x.strokeStyle='#a5f3fc';x.strokeRect(q.x,q.y,q.w,q.h);}
+      function flip(px,ang,active){x.save();x.translate(px,510);x.rotate(ang);x.fillStyle=active?'#fbbf24':'#f97316';x.fillRect(0,-8,78,16);x.beginPath();x.arc(0,0,12,0,7);x.fillStyle='#fef3c7';x.fill();x.restore();}
+      flip(78,left?-0.35:0.35,left);flip(282,right?Math.PI+0.35:Math.PI-0.35,right);
+      x.beginPath();x.arc(p.x,p.y,p.r,0,7);x.fillStyle='#fff';x.shadowColor='#fff';x.shadowBlur=12;x.fill();x.shadowBlur=0;
+      if(!running){x.fillStyle='#000b';x.fillRect(20,250,320,100);x.fillStyle='#fff';x.font='bold 26px system-ui';x.fillText('GAME OVER',180,295);x.font='16px system-ui';x.fillText('Premi Ricomincia',180,325);}
+    }
+    function loop(){update();draw();requestAnimationFrame(loop)}
+    addEventListener('keydown',e=>{if(e.key==='ArrowLeft')left=true;if(e.key==='ArrowRight')right=true});
+    addEventListener('keyup',e=>{if(e.key==='ArrowLeft')left=false;if(e.key==='ArrowRight')right=false});
+    c.addEventListener('pointerdown',e=>{const r=c.getBoundingClientRect();if(e.clientX-r.left<r.width/2)left=true;else right=true});
+    c.addEventListener('pointerup',()=>{left=false;right=false});
+    document.getElementById('restart').onclick=()=>{score=0;balls=3;running=true;scoreEl.textContent=0;ballsEl.textContent=3;resetBall()};
+    loop();
+  </script>
+</body>
+</html>
